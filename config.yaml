@@ -1,0 +1,289 @@
+log:
+  level: error
+  file: ./oxidns.log
+
+api:
+  http:
+    listen: :9199
+    webui:
+      root: ./webui
+
+plugins:
+  - tag: subscription_cron
+    type: cron
+    args:
+      timezone: "Asia/Shanghai"
+      jobs:
+        - name: refresh_rule_subscriptions
+          interval: 24h
+          executors:
+            - "$subscription_refresh"
+
+  # 2. 用 sequence 串联下载和全量 reload
+  - tag: subscription_refresh
+    type: sequence
+    args:
+      - exec: "$subscription_download"
+      - exec: "$reload_rule_providers"
+
+  # 3. 拉取远程订阅文件
+  - tag: subscription_download
+    type: download
+    args:
+      timeout: 60s
+      startup_if_missing: true
+      downloads:
+        - url: "https://fastly.jsdelivr.net/gh/pmkol/easymosdns@rules/gfw_ip_list.txt"
+          dir: "./rules"
+          filename: "gfw_ip.txt"
+        - url: "https://anti-ad.net/adguard.txt"
+          dir: "./rules"
+          filename: "adguard.txt"
+        - url: "https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geosite.dat"
+          dir: "./rules"
+          filename: "geosite.dat"
+        - url: "https://cdn.jsdelivr.net/gh/Loyalsoldier/geoip@release/geoip-only-cn-private.dat"
+          dir: "./rules"
+          filename: "geoip.dat"
+
+  # 4. 下载完成后只刷新相关 provider
+  - tag: reload_rule_providers
+    type: reload_provider
+    args:
+      - "$geoip_cn"
+      - "$geosite_cn"
+      - "$geosite_no_cn"
+      - "$category_ads_all"
+      - "$ad_rules"
+    # 5. 这些 provider 会在 reload 后重新读取本地文件
+  - tag: gfw_ip
+    type: ip_set
+    args:
+      files:
+        - "./rules/gfw_ip.txt"
+
+  - tag: ad_rules
+    type: adguard_rule
+    args:
+      files:
+        - "./rules/adguard.txt"
+
+  - tag: geoip_cn
+    type: geoip
+    args:
+      file: "./rules/geoip.dat"
+      selectors:
+        - "cn"
+
+  - tag: geosite_cn
+    type: geosite
+    args:
+      file: "./rules/geosite.dat"
+      selectors:
+        - "cn"
+
+  - tag: geosite_no_cn
+    type: geosite
+    args:
+      file: "./rules/geosite.dat"
+      selectors:
+        - "geolocation-!cn"
+
+  - tag: category_ads_all
+    type: geosite
+    args:
+      file: "./rules/geosite.dat"
+      selectors:
+        - "category-ads-all"
+        - "win-spy"
+        - "win-update"
+        - "win-extra"
+
+  - tag: hosts
+    type: hosts
+    args:
+      short_circuit: false
+
+  - tag: ecscn
+    type: domain_set
+    args:
+      exps:
+        - oxidns.org
+
+  - tag: ecs_noncn
+    type: domain_set
+    args:
+      exps:
+
+  - tag: lazy_cache
+    type: cache
+    args:
+      # 1. 增加容量：现代设备内存充足，8192 条仅占用几 MB
+      size: 8192
+      # 2. 启用短路：命中缓存后直接结束，不再跑后续逻辑，节省 CPU
+      short_circuit: true
+      # 3. 异步刷新：TTL 过期后 24 小时内仍可返回旧值，同时后台自动更新
+      lazy_cache_ttl: 86400
+      # 4. 负缓存：缓存不存在的域名（NXDOMAIN），防止被无效请求拖慢
+      cache_negative: true
+      # 负缓存 TTL 上限
+      max_negative_ttl: 300
+      # 负响应没有 SOA 时使用的回退 TTL
+      negative_ttl_without_soa: 60
+      # 5. 限制正向 TTL：防止某些记录 TTL 过长（如几天）导致更新太慢
+      max_positive_ttl: 3600
+      # 6. 提高命中率：不将客户端子网(ECS)作为缓存键，让不同位置的用户共享缓存
+      ecs_in_key: false
+      # 7. 持久化：重启 ForgeDNS 后缓存不消失，冷启动也能秒开
+      dump_file: "./rules/dns_cache.dump"
+      dump_interval: 3600
+
+  - tag: ecs_hk
+    type: ecs_handler
+    args:
+      forward: false
+      preset: 203.142.100.0
+      send: false
+      mask4: 24
+      mask6: 48
+
+  - tag: block_seq
+    type: sequence
+    args:
+      - matches: qtype 65 255
+        exec: reject 0
+      - matches:
+          - qname "$category_ads_all"
+        exec: $ad_blackhole
+      - matches: question $ad_rules
+        exec: $ad_blackhole
+
+  - tag: ad_blackhole
+    type: black_hole
+    args:
+      ips:
+        - "0.0.0.0"
+        - "::"
+      short_circuit: true
+
+  - tag: rate_limit
+    type: rate_limiter
+    args:
+      qps: 200
+      burst: 400
+      mask4: 32
+      mask6: 48
+
+  - tag: forward_local
+    type: forward
+    args:
+      concurrent: 3
+      upstreams:
+        - addr: https://doh.pub/dns-query
+          dial_addr: 1.12.12.12
+        - addr: https://dns.alidns.com/dns-query
+          dial_addr: 223.5.5.5
+        - addr: tcp://180.184.1.1
+          enable_pipeline: true
+
+  - tag: forward_remote
+    type: forward
+    args:
+      concurrent: 2
+      upstreams:
+        - addr: https://dns.google/dns-query
+          dial_addr: 8.8.8.8
+        - addr: https://dns.nextdns.io
+          dial_addr: 45.90.28.65
+          enable_pipeline: true
+
+  - tag: forward_controld
+    type: forward
+    args:
+      concurrent: 2
+      upstreams:
+        - addr: https://dns.quad9.net/dns-query
+          dial_addr: 9.9.9.9
+        - addr: https://doh.opendns.com/dns-query
+          dial_addr: 208.67.222.222
+          enable_pipeline: true
+
+  - tag: local_seq
+    type: sequence
+    args:
+      - exec: $forward_local
+      - matches: resp_ip $geoip_cn
+        exec: accept
+      - matches: "has_resp"
+        exec: accept
+      - exec: ttl 600
+
+  - tag: remote_seq
+    type: sequence
+    args:
+      - exec: prefer_ipv4
+      - exec: $ecs_hk
+      - exec: $forward_remote
+      - matches: resp_ip $gfw_ip
+        exec: reject # "black_hole 0.0.0.0 ::" 
+      - matches: "!resp_ip $geoip_cn"
+        exec: accept
+      - exec: ttl 300
+
+  - tag: controld_seq
+    type: sequence
+    args:
+      - exec: prefer_ipv4
+      - exec: $ecs_hk
+      - exec: $forward_controld
+      - matches: "!resp_ip $gfw_ip"
+        exec: accept
+      - exec: ttl 60
+
+  - tag: fallback
+    type: fallback
+    args:
+      primary: controld_seq
+      secondary: remote_seq
+      threshold: 500
+      always_standby: false
+
+  - tag: main_sequence
+    type: sequence
+    args:
+      - matches: "!$rate_limit"
+        exec: reject 3
+      - exec: $hosts
+      - matches: has_resp
+        exec: accept
+      - exec: jump block_seq
+      - exec: $lazy_cache
+      - matches: has_resp
+        exec: accept
+      # 匹配 ecs_cn_domain.txt，强制跳转到国内序列
+      - matches: qname $ecscn
+        exec: $forward_local
+      - matches: has_resp
+        exec: accept
+      # 匹配 ecs_noncn_domain.txt，强制跳转到远程序列
+      - matches: qname $ecs_noncn
+        exec: $forward_remote
+      - matches: has_resp
+        exec: accept
+      - matches: qname $geosite_cn
+        exec: goto local_seq
+      - matches: qname $geosite_no_cn
+        exec: goto remote_seq
+      - exec: $fallback
+
+  - tag: udp_server
+    type: udp_server
+    args:
+      entry: main_sequence
+      listen: ":53"
+
+  - tag: tcp_server
+    type: tcp_server
+    args:
+      entry: main_sequence
+      listen: ":53"
