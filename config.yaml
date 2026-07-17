@@ -38,21 +38,30 @@ plugins:
   - tag: subscription_download
     type: download
     args:
-      timeout: 60s
-      startup_if_missing: true
       downloads:
         - url: https://fastly.jsdelivr.net/gh/pmkol/easymosdns@rules/gfw_ip_list.txt
           dir: ./rules
           filename: gfw_ip.txt
         - url: https://anti-ad.net/adguard.txt
           dir: ./rules
-          filename: adguard.txt
+          filename: antiad.txt
         - url: https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geosite.dat
           dir: ./rules
           filename: geosite.dat
         - url: https://cdn.jsdelivr.net/gh/Loyalsoldier/geoip@release/geoip-only-cn-private.dat
           dir: ./rules
           filename: geoip.dat
+        - url: https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt
+          dir: ./rules
+          filename: adguard.txt
+        - url: https://adaway.org/hosts.txt
+          dir: ./rules
+          filename: adaway.txt
+        - url: https://raw.githubusercontent.com/217heidai/adblockfilters/main/rules/adblockdns.txt
+          dir: ./rules
+          filename: adblock.txt
+      timeout: 60s
+      startup_if_missing: true
   - tag: reload_rule_providers
     type: reload_provider
     args:
@@ -71,7 +80,10 @@ plugins:
     type: adguard_rule
     args:
       files:
+        - ./rules/antiad.txt
         - ./rules/adguard.txt
+        - ./rules/adaway.txt
+        - ./rules/adblock.txt
   - tag: geoip_cn
     type: geoip
     args:
@@ -106,12 +118,7 @@ plugins:
   - tag: ecscn
     type: domain_set
     args:
-      exps:
-        - tv.micu.hk
-        - tv1.micu.hk
-        - v0.micu.hk
-        - v1.micu.hk
-        - v2.micu.hk
+      exps: null
   - tag: ecs_noncn
     type: domain_set
   - tag: local_ptr
