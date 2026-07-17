@@ -40,25 +40,25 @@ plugins:
     args:
       downloads:
         - url: https://fastly.jsdelivr.net/gh/pmkol/easymosdns@rules/gfw_ip_list.txt
-          dir: ./rules
+          dir: /etc/oxidns/rules
           filename: gfw_ip.txt
         - url: https://anti-ad.net/adguard.txt
-          dir: ./rules
+          dir: /etc/oxidns/rules
           filename: antiad.txt
         - url: https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geosite.dat
-          dir: ./rules
+          dir: /etc/oxidns/rules
           filename: geosite.dat
         - url: https://cdn.jsdelivr.net/gh/Loyalsoldier/geoip@release/geoip-only-cn-private.dat
-          dir: ./rules
+          dir: /etc/oxidns/rules
           filename: geoip.dat
         - url: https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt
-          dir: ./rules
+          dir: /etc/oxidns/rules
           filename: adguard.txt
         - url: https://adaway.org/hosts.txt
-          dir: ./rules
+          dir: /etc/oxidns/rules
           filename: adaway.txt
         - url: https://raw.githubusercontent.com/217heidai/adblockfilters/main/rules/adblockdns.txt
-          dir: ./rules
+          dir: /etc/oxidns/rules
           filename: adblock.txt
       timeout: 60s
       startup_if_missing: true
@@ -75,37 +75,37 @@ plugins:
     type: ip_set
     args:
       files:
-        - ./rules/gfw_ip.txt
+        - /etc/oxidns/rules/gfw_ip.txt
   - tag: ad_rules
     type: adguard_rule
     args:
       files:
-        - ./rules/antiad.txt
-        - ./rules/adguard.txt
-        - ./rules/adaway.txt
-        - ./rules/adblock.txt
+        - /etc/oxidns/rules/antiad.txt
+        - /etc/oxidns/rules/adguard.txt
+        - /etc/oxidns/rules/adaway.txt
+        - /etc/oxidns/rules/adblock.txt
   - tag: geoip_cn
     type: geoip
     args:
-      file: ./rules/geoip.dat
+      file: /etc/oxidns/rules/geoip.dat
       selectors:
         - cn
   - tag: geosite_cn
     type: geosite
     args:
-      file: ./rules/geosite.dat
+      file: /etc/oxidns/rules/geosite.dat
       selectors:
         - cn
   - tag: geosite_no_cn
     type: geosite
     args:
-      file: ./rules/geosite.dat
+      file: /etc/oxidns/rules/geosite.dat
       selectors:
         - geolocation-!cn
   - tag: category_ads_all
     type: geosite
     args:
-      file: ./rules/geosite.dat
+      file: /etc/oxidns/rules/geosite.dat
       selectors:
         - category-ads-all
         - win-spy
@@ -139,12 +139,12 @@ plugins:
       negative_ttl_without_soa: 60
       max_positive_ttl: 3600
       ecs_in_key: true
-      dump_file: ./rules/dns_cache.dump
+      dump_file: /etc/oxidns/rules/dns_cache.dump
       dump_interval: 3600
   - tag: query_recorder_main
     type: query_recorder
     args:
-      path: ./rules/query-recorder-main.sqlite
+      path: /etc/oxidns/rules/query-recorder-main.sqlite
       queue_size: 8192
       batch_size: 256
       flush_interval_ms: 200
