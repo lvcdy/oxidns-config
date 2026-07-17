@@ -1,13 +1,25 @@
+# OxiDNS default configuration file
+#
+# See full documentation at:
+# https://oxidns.org
+
 log:
   level: info
-  file: ./oxidns.log
-  rotation:
-    type: never
+
+# Management API (optional)
 api:
   http:
-    listen: :80
+    listen: "192.168.1.1:9199"
+    # auth:
+    #   type: basic
+    #   username: admin
+    #   password: secret
+    # Optional static WebUI directory. Relative paths resolve from -d/--working-dir.
+    # Debian packages use -d /var/lib/oxidns, so ./webui means /var/lib/oxidns/webui.
+    # API routes are served under /api/*.
     webui:
-      root: ./webui
+      root: "/usr/share/oxidns/webui"
+
 plugins:
   - tag: subscription_cron
     type: cron
@@ -49,6 +61,7 @@ plugins:
       - $geosite_no_cn
       - $category_ads_all
       - $ad_rules
+      - $gfw_ip
   - tag: gfw_ip
     type: ip_set
     args:
@@ -118,7 +131,7 @@ plugins:
       max_negative_ttl: 300
       negative_ttl_without_soa: 60
       max_positive_ttl: 3600
-      ecs_in_key: false
+      ecs_in_key: true
       dump_file: ./rules/dns_cache.dump
       dump_interval: 3600
   - tag: query_recorder_main
@@ -160,19 +173,35 @@ plugins:
     type: forward
     args:
       concurrent: 3
+      response_selection: balanced
       upstreams:
         - addr: https://doh.pub/dns-query
-          dial_addr: 1.12.12.12
+          bootstrap: 119.29.29.29:53
+          insecure_skip_verify: false
+          enable_http3: false
         - addr: https://dns.alidns.com/dns-query
-          dial_addr: 223.5.5.5
-        - addr: tcp://180.184.1.1
-          enable_pipeline: true
+          bootstrap: 223.5.5.5:53
+          insecure_skip_verify: false
+          enable_http3: false
+        - addr: 180.184.1.1
+          insecure_skip_verify: false
+          enable_http3: false
+      short_circuit: false
   - tag: forward_remote
     type: forward
     args:
-      concurrent: 1
+      concurrent: 2
+      response_selection: balanced
       upstreams:
-        - addr: udp://10.0.1.1:7874
+        - addr: https://cloudflare-dns.com/dns-query
+          bootstrap: 223.5.5.5:53
+          insecure_skip_verify: false
+          enable_http3: true
+        - addr: https://dns.google/dns-query
+          bootstrap: 223.5.5.5:53
+          insecure_skip_verify: false
+          enable_http3: true
+      short_circuit: false
   - tag: local_seq
     type: sequence
     args:
@@ -183,7 +212,6 @@ plugins:
   - tag: remote_seq
     type: sequence
     args:
-      - exec: prefer_ipv4
       - exec: $forward_remote
       - matches: has_resp
         exec: accept
@@ -214,13 +242,17 @@ plugins:
       - matches: qname $geosite_no_cn
         exec: goto remote_seq
       - exec: goto remote_seq
+
+  # UDP server listening on :5335
   - tag: udp_server
     type: udp_server
     args:
       entry: main_sequence
-      listen: :53
+      listen: ":5335"
+
+  # TCP server listening on :5335
   - tag: tcp_server
     type: tcp_server
     args:
       entry: main_sequence
-      listen: :53
+      listen: ":5335"
