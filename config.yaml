@@ -1,26 +1,44 @@
-# OxiDNS 优化配置
-# 网络架构：用户设备 → dnsmasq(:53) → OpenClash(:7874) → OxiDNS(:5335) → 上游 DNS
+# OxiDNS 双缓存分离配置
+# 链路：用户设备 → dnsmasq(:53) → OpenClash(:7874) → OxiDNS(:5335) → 上游 DNS
 
+# ── 日志 ──
 log:
   level: warn
 
-# 管理面板：浏览器访问 http://192.168.1.1:9199
+# ── 出站网络：订阅下载等内部请求的 DNS 解析和代理 ──
+network:
+  outbound:
+    default: direct
+    profiles:
+      direct:
+        resolver:
+          nameservers:
+            - addr: "223.5.5.5"
+          ip_version: 4
+          timeout: 5s
+        proxy: none
+      remote:
+        resolver:
+          nameservers:
+            - addr: "223.5.5.5"
+          ip_version: 4
+          timeout: 5s
+        proxy:
+          socks5: "127.0.0.1:7893"
+
+# ── 管理面板：http://192.168.1.1:9199 ──
 api:
   http:
     listen: "192.168.1.1:9199"
-    # auth:
-    #   type: basic
-    #   username: admin
-    #   password: secret
     webui:
       root: "/usr/share/oxidns/webui"
 
 plugins:
-  # ──────────────────────────────────────
-  # 规则订阅：每 12 小时自动更新
-  # ──────────────────────────────────────
 
-  # 定时触发订阅刷新
+  # ═══════════════════════════════════════
+  # 定时任务
+  # ═══════════════════════════════════════
+
   - tag: subscription_cron
     type: cron
     args:
@@ -31,7 +49,7 @@ plugins:
           executors:
             - $subscription_refresh
 
-  # 顺序执行：先下载 → 再重载
+  # 先下载规则，再重载提供器
   - tag: subscription_refresh
     type: sequence
     args:
@@ -78,9 +96,9 @@ plugins:
       - $ad_rules
       - $gfw_ip
 
-  # ──────────────────────────────────────
-  # 规则提供器：被主链路引用的数据源
-  # ──────────────────────────────────────
+  # ═══════════════════════════════════════
+  # 规则提供器
+  # ═══════════════════════════════════════
 
   # GFW 污染 IP 列表
   - tag: gfw_ip
@@ -123,7 +141,7 @@ plugins:
       selectors:
         - geolocation-!cn
 
-  # Geosite：广告域名（包含 Win 广告/间谍/额外更新）
+  # Geosite：广告域名
   - tag: category_ads_all
     type: geosite
     args:
@@ -133,29 +151,29 @@ plugins:
         - win-spy
         - win-extra
 
-  # ──────────────────────────────────────
-  # 本地数据源
-  # ──────────────────────────────────────
+  # ═══════════════════════════════════════
+  # 本地数据
+  # ═══════════════════════════════════════
 
-  # 系统 hosts 文件：可手动添加域名映射
+  # 系统 hosts：可手动添加域名映射
   - tag: hosts
     type: hosts
     args:
-      short_circuit: true   # 命中后立即返回，不再继续解析
+      short_circuit: true
 
-  # ECS 指定域名（中国）：通过 WebUI 添加需要指定中国 ECS 的域名
+  # 需要指定中国 ECS 的域名（通过 WebUI 添加）
   - tag: ecscn
     type: domain_set
     args:
       exps: null
 
-  # ECS 指定域名（非中国）：通过 WebUI 添加需要指定海外 ECS 的域名
+  # 需要指定海外 ECS 的域名（通过 WebUI 添加）
   - tag: ecs_noncn
     type: domain_set
     args:
       exps: null
 
-  # 内网 PTR 反向解析：匹配私网地址段，直接拒绝而非转发上游
+  # 内网 PTR 反向解析：匹配私网地址段，拒绝而非转发上游
   - tag: local_ptr
     type: domain_set
     args:
@@ -164,73 +182,151 @@ plugins:
         - 16.172.in-addr.arpa.     # 172.16.x.x
         - 10.in-addr.arpa.         # 10.x.x.x
 
-  # ──────────────────────────────────────
-  # 缓存
-  # ──────────────────────────────────────
+  # 内网 IP 段（预留，用于按客户端 IP 分缓存）
+  - tag: private_lan_ip
+    type: ip_set
+    args:
+      ips:
+        - "10.0.0.0/8"
+        - "100.64.0.0/10"
+        - "127.0.0.0/8"
+        - "169.254.0.0/16"
+        - "172.16.0.0/12"
+        - "192.168.0.0/16"
 
-  - tag: lazy_cache
+  # ═══════════════════════════════════════
+  # 双缓存：国内国际各一个，TTL 淘汰互不干扰
+  # ═══════════════════════════════════════
+
+  # 国内缓存：乐观缓存 24h，配合 OpenClash Fake-IP 合理
+  - tag: cache_direct
     type: cache
     args:
       size: 8192
-      short_circuit: true        # 缓存命中后立即停止，不再查询上游
-      lazy_cache_ttl: 86400      # 过期记录保留 24h，配合 OpenClash Fake-IP 无需频繁刷新
-      cache_negative: true       # 缓存失败响应，防止重复查询不存在的域名
-      max_negative_ttl: 300      # 失败响应最多缓存 5 分钟
+      short_circuit: true
+      lazy_cache_ttl: 86400
+      cache_negative: true
+      max_negative_ttl: 300
       negative_ttl_without_soa: 60
-      max_positive_ttl: 3600     # 成功响应最多缓存 1 小时
-      min_positive_ttl: 4        # 过滤 TTL < 4s 的异常记录
-      ecs_in_key: false          # 不将 ECS 信息纳入缓存键，所有客户端共享缓存，提升命中率
-      dump_file: /etc/oxidns/rules/dns_cache.dump   # 缓存持久化文件
-      dump_interval: 1800        # 每 30 分钟写盘一次，防止意外重启丢失缓存
+      max_positive_ttl: 3600
+      min_positive_ttl: 4
+      ecs_in_key: false
+      dump_file: /etc/oxidns/rules/dns_cache_direct.dump
+      dump_interval: 1800
 
-  # ──────────────────────────────────────
-  # 拦截链：处理广告 / 恶意 / 不需要的查询
-  # ──────────────────────────────────────
+  # 国际缓存：乐观缓存 1h
+  - tag: cache_remote
+    type: cache
+    args:
+      size: 8192
+      short_circuit: true
+      lazy_cache_ttl: 3600
+      cache_negative: true
+      max_negative_ttl: 300
+      negative_ttl_without_soa: 60
+      max_positive_ttl: 1800
+      min_positive_ttl: 4
+      ecs_in_key: false
+      dump_file: /etc/oxidns/rules/dns_cache_remote.dump
+      dump_interval: 1800
+
+  # ═══════════════════════════════════════
+  # ECS 处理器
+  # ═══════════════════════════════════════
+
+  # 国内：转发客户端 ECS 但不主动发送（CDN 就近 + 防泄漏）
+  - tag: ecs_direct
+    type: ecs_handler
+    args:
+      forward: true
+      send: false
+
+  # 剥离：不转发也不发送（用于 ANY 等不需要 ECS 的查询）
+  - tag: ecs_strip
+    type: ecs_handler
+    args:
+      forward: false
+      send: false
+
+  # ═══════════════════════════════════════
+  # TTL 控制器
+  # ═══════════════════════════════════════
+
+  # 国内：60s ~ 3600s
+  - tag: ttl_direct
+    type: ttl
+    args:
+      min: 60
+      max: 3600
+
+  # 国际：300s ~ 86400s
+  - tag: ttl_remote
+    type: ttl
+    args:
+      min: 300
+      max: 86400
+
+  # ═══════════════════════════════════════
+  # 拦截链
+  # ═══════════════════════════════════════
 
   - tag: block_seq
     type: sequence
     args:
-      # 拒绝 HTTPS(65) 和 ANY(255) 类型查询
+      # 拒绝 HTTPS(65) 和 ANY(255) 查询
       - matches: qtype 65 255
         exec: reject 0
+      # 拒绝 PTR 查询
+      - matches: qtype PTR
+        exec: reject 3
       # 广告域名 → 黑洞
       - matches: qname $category_ads_all
         exec: $ad_blackhole
       - matches: qname $ad_rules
         exec: $ad_blackhole
-      # 内网 PTR 查询 → 直接拒绝
+      # 内网 PTR 查询 → NXDOMAIN
       - matches: qname $local_ptr
         exec: reject 3
 
-  # 广告黑洞：返回空地址，short_circuit 立即停止链路
+  # 广告黑洞：A→0.0.0.0 AAAA→::
   - tag: ad_blackhole
     type: black_hole
     args:
-      mode: null                  # A → 0.0.0.0，AAAA → ::
+      mode: null
       short_circuit: true
 
-  # ──────────────────────────────────────
-  # 限流：防止异常流量压垮上游
-  # ──────────────────────────────────────
+  # ═══════════════════════════════════════
+  # 限流
+  # ═══════════════════════════════════════
 
   - tag: rate_limit
     type: rate_limiter
     args:
-      qps: 200                    # 每秒 200 次查询
-      burst: 400                   # 允许突发 400 次
-      mask4: 32                    # IPv4 按单 IP 限流
-      mask6: 48                    # IPv6 按 /48 网段限流
+      qps: 200
+      burst: 400
+      mask4: 32
+      mask6: 48
 
-  # ──────────────────────────────────────
-  # 上游 DNS：国内走 DoH 加密，国际走海外 DoH
-  # ──────────────────────────────────────
+  # ═══════════════════════════════════════
+  # 反查：从响应中学习 IP→域名映射
+  # ═══════════════════════════════════════
 
-  # 国内上游（腾讯/阿里/火山）
-  - tag: forward_local
+  - tag: reverse_lookup
+    type: reverse_lookup
+    args:
+      size: 4096
+      ttl: 1800
+      handle_ptr: false
+
+  # ═══════════════════════════════════════
+  # 上游 DNS
+  # ═══════════════════════════════════════
+
+  # 国内：腾讯 DoH
+  - tag: forward_tencent
     type: forward
     args:
-      concurrent: 3
-      response_selection: balanced
+      concurrent: 1
       upstreams:
         - tag: "doh_tencent"
           addr: https://doh.pub/dns-query
@@ -241,6 +337,13 @@ plugins:
           max_conns: 64
           insecure_skip_verify: false
           enable_http3: false
+
+  # 国内：阿里 DoH
+  - tag: forward_alibaba
+    type: forward
+    args:
+      concurrent: 1
+      upstreams:
         - tag: "doh_alibaba"
           addr: https://dns.alidns.com/dns-query
           bootstrap: 223.5.5.5:53
@@ -250,21 +353,12 @@ plugins:
           max_conns: 64
           insecure_skip_verify: false
           enable_http3: false
-        - tag: "udp_huoshan"
-          addr: 180.184.1.1
-          timeout: 3s
-          idle_timeout: 30
-          max_conns: 64
-          insecure_skip_verify: false
-          enable_http3: false
-      short_circuit: false
 
-  # 国际上游（Cloudflare / Google）
-  - tag: forward_remote
+  # 国际：Cloudflare DoH
+  - tag: forward_cloudflare
     type: forward
     args:
-      concurrent: 2
-      response_selection: balanced
+      concurrent: 1
       upstreams:
         - tag: "doh_cloudflare"
           addr: https://cloudflare-dns.com/dns-query
@@ -275,6 +369,13 @@ plugins:
           max_conns: 64
           insecure_skip_verify: false
           enable_http3: true
+
+  # 国际：Google DoH
+  - tag: forward_google
+    type: forward
+    args:
+      concurrent: 1
+      upstreams:
         - tag: "doh_google"
           addr: https://dns.google/dns-query
           bootstrap: 223.5.5.5:53
@@ -284,11 +385,32 @@ plugins:
           max_conns: 64
           insecure_skip_verify: false
           enable_http3: true
-      short_circuit: false
 
-  # ──────────────────────────────────────
-  # 双栈优选：有 IPv6 时优先使用 AAAA 记录
-  # ──────────────────────────────────────
+  # ═══════════════════════════════════════
+  # 故障转移：主上游超时自动切换备用
+  # ═══════════════════════════════════════
+
+  # 国内：腾讯（主）→ 阿里（备），2.5 秒切换
+  - tag: fb_local
+    type: fallback
+    args:
+      primary: forward_tencent
+      secondary: forward_alibaba
+      threshold: 2500
+      always_standby: false
+
+  # 国际：Cloudflare（主）→ Google（备），2.5 秒切换
+  - tag: fb_remote
+    type: fallback
+    args:
+      primary: forward_cloudflare
+      secondary: forward_google
+      threshold: 2500
+      always_standby: false
+
+  # ═══════════════════════════════════════
+  # 双栈优选
+  # ═══════════════════════════════════════
 
   - tag: prefer_v6
     type: prefer_ipv6
@@ -296,70 +418,84 @@ plugins:
       cache: true
       cache_ttl: 3600
 
-  # ──────────────────────────────────────
-  # 转发链：国内/国际各自独立的处理流程
-  # ──────────────────────────────────────
+  # ═══════════════════════════════════════
+  # 转发链
+  # ═══════════════════════════════════════
 
-  # 国内链：查询 → 校验结果是中国 IP → 接受；否则限制 TTL
+  # 国内：缓存 → ECS → 故障转移 → 双栈 → 校验中国 IP → TTL
   - tag: local_seq
     type: sequence
     args:
-      - exec: $forward_local
+      - exec: $cache_direct
+      - matches: has_resp
+        exec: accept
+      - exec: $ecs_direct
+      - exec: $fb_local
+      - exec: $prefer_v6
       - matches: resp_ip $geoip_cn
         exec: accept
-      - exec: ttl 600
+      - exec: $ttl_direct
 
-  # 国际链：查询 → 有结果就接受；否则限制 TTL
+  # 国际：缓存 → 故障转移 → 双栈 → 有结果就接受 → TTL
   - tag: remote_seq
     type: sequence
     args:
-      - exec: $forward_remote
+      - exec: $cache_remote
       - matches: has_resp
         exec: accept
-      - exec: ttl 300
+      - exec: $fb_remote
+      - exec: $prefer_v6
+      - matches: has_resp
+        exec: accept
+      - exec: $ttl_remote
 
-  # ──────────────────────────────────────
-  # 主链路：所有查询的入口
-  # 执行顺序：限流 → hosts → 拦截 → 缓存 → ECS → geosite 分流 → 默认国际
-  # ──────────────────────────────────────
+  # ═══════════════════════════════════════
+  # 主链路
+  # ═══════════════════════════════════════
 
   - tag: main_sequence
     type: sequence
     args:
-      # 超出限流 → 直接拒绝
+      # 限流
       - matches: "!$rate_limit"
         exec: reject 3
-      # 本地 hosts 解析
+      # 反查（学习 IP→域名）
+      - exec: $reverse_lookup
+      - matches: has_resp
+        exec: accept
+      # 本地 hosts
       - exec: $hosts
       - matches: has_resp
         exec: accept
-      # 广告 / 恶意拦截
+      # 拦截（广告/HTTPS/PTR）
       - exec: jump block_seq
-      # 查询缓存
-      - exec: $lazy_cache
-      - matches: has_resp
+      # ANY 查询剥离 ECS
+      - matches: qtype 255
+        exec: $ecs_strip
+      - matches: qtype 255
+        exec: $ttl_direct
+      - matches: qtype 255
         exec: accept
-      # ECS 指定域名：中国 ECS → 国内上游
+      # ECS 指定域名
       - matches: qname $ecscn
-        exec: $forward_local
+        exec: goto local_seq
       - matches: has_resp
         exec: accept
-      # ECS 指定域名：海外 ECS → 国际上游
       - matches: qname $ecs_noncn
-        exec: $forward_remote
+        exec: goto remote_seq
       - matches: has_resp
         exec: accept
-      # 基于 Geosite 分流
+      # Geosite 分流
       - matches: qname $geosite_cn
         exec: goto local_seq
       - matches: qname $geosite_no_cn
         exec: goto remote_seq
-      # 未匹配任何规则 → 默认走国际上游
+      # 默认走国际
       - exec: goto remote_seq
 
-  # ──────────────────────────────────────
-  # 监听入口：端口 5335 供 OpenClash 上游调用
-  # ──────────────────────────────────────
+  # ═══════════════════════════════════════
+  # 监听入口
+  # ═══════════════════════════════════════
 
   - tag: udp_server
     type: udp_server
