@@ -5,7 +5,7 @@
 log:
   level: warn
 
-# ── 出站网络：订阅下载等内部请求的 DNS 解析和代理 ──
+# ── 出站网络 ──
 network:
   outbound:
     default: direct
@@ -26,7 +26,7 @@ network:
         proxy:
           socks5: "127.0.0.1:7893"
 
-# ── 管理面板：http://192.168.1.1:9199 ──
+# ── 管理面板 ──
 api:
   http:
     listen: "192.168.1.1:9199"
@@ -49,17 +49,16 @@ plugins:
           executors:
             - $subscription_refresh
 
-  # 先下载规则，再重载提供器
   - tag: subscription_refresh
     type: sequence
     args:
       - exec: $subscription_download
       - exec: $reload_rule_providers
 
-  # 下载规则文件到本地
   - tag: subscription_download
     type: download
     args:
+      outbound: remote
       downloads:
         - url: https://fastly.jsdelivr.net/gh/pmkol/easymosdns@rules/gfw_ip_list.txt
           dir: /etc/oxidns/rules
@@ -85,7 +84,6 @@ plugins:
       timeout: 60s
       startup_if_missing: true
 
-  # 重载所有规则提供器，使新下载的规则生效
   - tag: reload_rule_providers
     type: reload_provider
     args:
@@ -100,14 +98,12 @@ plugins:
   # 规则提供器
   # ═══════════════════════════════════════
 
-  # GFW 污染 IP 列表
   - tag: gfw_ip
     type: ip_set
     args:
       files:
         - /etc/oxidns/rules/gfw_ip.txt
 
-  # 广告过滤规则（合并多个列表）
   - tag: ad_rules
     type: adguard_rule
     args:
@@ -117,7 +113,6 @@ plugins:
         - /etc/oxidns/rules/adaway.txt
         - /etc/oxidns/rules/adblock.txt
 
-  # GeoIP：中国 IP 段
   - tag: geoip_cn
     type: geoip
     args:
@@ -125,7 +120,6 @@ plugins:
       selectors:
         - cn
 
-  # Geosite：中国域名
   - tag: geosite_cn
     type: geosite
     args:
@@ -133,7 +127,6 @@ plugins:
       selectors:
         - cn
 
-  # Geosite：非中国域名
   - tag: geosite_no_cn
     type: geosite
     args:
@@ -141,7 +134,6 @@ plugins:
       selectors:
         - geolocation-!cn
 
-  # Geosite：广告域名
   - tag: category_ads_all
     type: geosite
     args:
@@ -155,34 +147,29 @@ plugins:
   # 本地数据
   # ═══════════════════════════════════════
 
-  # 系统 hosts：可手动添加域名映射
   - tag: hosts
     type: hosts
     args:
       short_circuit: true
 
-  # 需要指定中国 ECS 的域名（通过 WebUI 添加）
   - tag: ecscn
     type: domain_set
     args:
       exps: null
 
-  # 需要指定海外 ECS 的域名（通过 WebUI 添加）
   - tag: ecs_noncn
     type: domain_set
     args:
       exps: null
 
-  # 内网 PTR 反向解析：匹配私网地址段，拒绝而非转发上游
   - tag: local_ptr
     type: domain_set
     args:
       exps:
-        - 168.192.in-addr.arpa.    # 192.168.x.x
-        - 16.172.in-addr.arpa.     # 172.16.x.x
-        - 10.in-addr.arpa.         # 10.x.x.x
+        - 168.192.in-addr.arpa.
+        - 16.172.in-addr.arpa.
+        - 10.in-addr.arpa.
 
-  # 内网 IP 段（预留，用于按客户端 IP 分缓存）
   - tag: private_lan_ip
     type: ip_set
     args:
@@ -195,10 +182,9 @@ plugins:
         - "192.168.0.0/16"
 
   # ═══════════════════════════════════════
-  # 双缓存：国内国际各一个，TTL 淘汰互不干扰
+  # 双缓存
   # ═══════════════════════════════════════
 
-  # 国内缓存：乐观缓存 24h，配合 OpenClash Fake-IP 合理
   - tag: cache_direct
     type: cache
     args:
@@ -214,7 +200,6 @@ plugins:
       dump_file: /etc/oxidns/rules/dns_cache_direct.dump
       dump_interval: 1800
 
-  # 国际缓存：乐观缓存 1h
   - tag: cache_remote
     type: cache
     args:
@@ -234,14 +219,12 @@ plugins:
   # ECS 处理器
   # ═══════════════════════════════════════
 
-  # 国内：转发客户端 ECS 但不主动发送（CDN 就近 + 防泄漏）
   - tag: ecs_direct
     type: ecs_handler
     args:
       forward: true
       send: false
 
-  # 剥离：不转发也不发送（用于 ANY 等不需要 ECS 的查询）
   - tag: ecs_strip
     type: ecs_handler
     args:
@@ -252,14 +235,12 @@ plugins:
   # TTL 控制器
   # ═══════════════════════════════════════
 
-  # 国内：60s ~ 3600s
   - tag: ttl_direct
     type: ttl
     args:
       min: 60
       max: 3600
 
-  # 国际：300s ~ 86400s
   - tag: ttl_remote
     type: ttl
     args:
@@ -273,22 +254,15 @@ plugins:
   - tag: block_seq
     type: sequence
     args:
-      # 拒绝 HTTPS(65) 和 ANY(255) 查询
-      - matches: qtype 65 255
-        exec: reject 0
-      # 拒绝 PTR 查询
       - matches: qtype PTR
         exec: reject 3
-      # 广告域名 → 黑洞
       - matches: qname $category_ads_all
         exec: $ad_blackhole
       - matches: qname $ad_rules
         exec: $ad_blackhole
-      # 内网 PTR 查询 → NXDOMAIN
       - matches: qname $local_ptr
         exec: reject 3
 
-  # 广告黑洞：A→0.0.0.0 AAAA→::
   - tag: ad_blackhole
     type: black_hole
     args:
@@ -308,7 +282,99 @@ plugins:
       mask6: 48
 
   # ═══════════════════════════════════════
-  # 反查：从响应中学习 IP→域名映射
+  # 上游 DNS
+  # ═══════════════════════════════════════
+
+  - tag: forward_tencent
+    type: forward
+    args:
+      concurrent: 1
+      response_selection: balanced
+      upstreams:
+        - tag: doh_tencent
+          addr: https://doh.pub/dns-query
+          bootstrap: 119.29.29.29:53
+          bootstrap_version: 4
+          idle_timeout: 30
+          max_conns: 64
+          insecure_skip_verify: false
+          timeout: 5s
+          enable_http3: false
+      short_circuit: false
+
+  - tag: forward_alibaba
+    type: forward
+    args:
+      concurrent: 1
+      response_selection: balanced
+      upstreams:
+        - tag: doh_alibaba
+          addr: https://dns.alidns.com/dns-query
+          bootstrap: 223.5.5.5:53
+          bootstrap_version: 4
+          idle_timeout: 30
+          max_conns: 64
+          insecure_skip_verify: false
+          timeout: 5s
+          enable_http3: false
+      short_circuit: false
+
+  - tag: forward_cloudflare
+    type: forward
+    args:
+      concurrent: 1
+      response_selection: balanced
+      upstreams:
+        - tag: doh_cloudflare
+          addr: https://cloudflare-dns.com/dns-query
+          bootstrap: 223.5.5.5:53
+          bootstrap_version: 4
+          idle_timeout: 30
+          max_conns: 64
+          insecure_skip_verify: false
+          timeout: 5s
+          enable_http3: true
+      short_circuit: false
+
+  - tag: forward_google
+    type: forward
+    args:
+      concurrent: 1
+      response_selection: balanced
+      upstreams:
+        - tag: doh_google
+          addr: https://dns.google/dns-query
+          bootstrap: 223.5.5.5:53
+          bootstrap_version: 4
+          idle_timeout: 30
+          max_conns: 64
+          insecure_skip_verify: false
+          timeout: 5s
+          enable_http3: true
+      short_circuit: false
+
+  # ═══════════════════════════════════════
+  # 故障转移
+  # ═══════════════════════════════════════
+
+  - tag: fb_local
+    type: fallback
+    args:
+      primary: forward_tencent
+      secondary: forward_alibaba
+      threshold: 2500
+      always_standby: false
+
+  - tag: fb_remote
+    type: fallback
+    args:
+      primary: forward_cloudflare
+      secondary: forward_google
+      threshold: 2500
+      always_standby: false
+
+  # ═══════════════════════════════════════
+  # 反查
   # ═══════════════════════════════════════
 
   - tag: reverse_lookup
@@ -319,97 +385,7 @@ plugins:
       handle_ptr: false
 
   # ═══════════════════════════════════════
-  # 上游 DNS
-  # ═══════════════════════════════════════
-
-  # 国内：腾讯 DoH
-  - tag: forward_tencent
-    type: forward
-    args:
-      concurrent: 1
-      upstreams:
-        - tag: "doh_tencent"
-          addr: https://doh.pub/dns-query
-          bootstrap: 119.29.29.29:53
-          bootstrap_version: 4
-          timeout: 5s
-          idle_timeout: 30
-          max_conns: 64
-          insecure_skip_verify: false
-          enable_http3: false
-
-  # 国内：阿里 DoH
-  - tag: forward_alibaba
-    type: forward
-    args:
-      concurrent: 1
-      upstreams:
-        - tag: "doh_alibaba"
-          addr: https://dns.alidns.com/dns-query
-          bootstrap: 223.5.5.5:53
-          bootstrap_version: 4
-          timeout: 5s
-          idle_timeout: 30
-          max_conns: 64
-          insecure_skip_verify: false
-          enable_http3: false
-
-  # 国际：Cloudflare DoH
-  - tag: forward_cloudflare
-    type: forward
-    args:
-      concurrent: 1
-      upstreams:
-        - tag: "doh_cloudflare"
-          addr: https://cloudflare-dns.com/dns-query
-          bootstrap: 223.5.5.5:53
-          bootstrap_version: 4
-          timeout: 5s
-          idle_timeout: 30
-          max_conns: 64
-          insecure_skip_verify: false
-          enable_http3: true
-
-  # 国际：Google DoH
-  - tag: forward_google
-    type: forward
-    args:
-      concurrent: 1
-      upstreams:
-        - tag: "doh_google"
-          addr: https://dns.google/dns-query
-          bootstrap: 223.5.5.5:53
-          bootstrap_version: 4
-          timeout: 5s
-          idle_timeout: 30
-          max_conns: 64
-          insecure_skip_verify: false
-          enable_http3: true
-
-  # ═══════════════════════════════════════
-  # 故障转移：主上游超时自动切换备用
-  # ═══════════════════════════════════════
-
-  # 国内：腾讯（主）→ 阿里（备），2.5 秒切换
-  - tag: fb_local
-    type: fallback
-    args:
-      primary: forward_tencent
-      secondary: forward_alibaba
-      threshold: 2500
-      always_standby: false
-
-  # 国际：Cloudflare（主）→ Google（备），2.5 秒切换
-  - tag: fb_remote
-    type: fallback
-    args:
-      primary: forward_cloudflare
-      secondary: forward_google
-      threshold: 2500
-      always_standby: false
-
-  # ═══════════════════════════════════════
-  # 双栈优选
+  # 双栈优选（必须放在 forward 之前）
   # ═══════════════════════════════════════
 
   - tag: prefer_v6
@@ -422,7 +398,7 @@ plugins:
   # 转发链
   # ═══════════════════════════════════════
 
-  # 国内：缓存 → ECS → 故障转移 → 双栈 → 校验中国 IP → TTL
+  # 国内：缓存 → ECS → 双栈 → 故障转移 → 反查 → 校验中国 IP → TTL
   - tag: local_seq
     type: sequence
     args:
@@ -430,21 +406,23 @@ plugins:
       - matches: has_resp
         exec: accept
       - exec: $ecs_direct
-      - exec: $fb_local
       - exec: $prefer_v6
+      - exec: $fb_local
+      - exec: $reverse_lookup
       - matches: resp_ip $geoip_cn
         exec: accept
       - exec: $ttl_direct
 
-  # 国际：缓存 → 故障转移 → 双栈 → 有结果就接受 → TTL
+  # 国际：缓存 → 双栈 → 故障转移 → 反查 → 有结果就接受 → TTL
   - tag: remote_seq
     type: sequence
     args:
       - exec: $cache_remote
       - matches: has_resp
         exec: accept
-      - exec: $fb_remote
       - exec: $prefer_v6
+      - exec: $fb_remote
+      - exec: $reverse_lookup
       - matches: has_resp
         exec: accept
       - exec: $ttl_remote
@@ -456,27 +434,20 @@ plugins:
   - tag: main_sequence
     type: sequence
     args:
-      # 限流
       - matches: "!$rate_limit"
         exec: reject 3
-      # 反查（学习 IP→域名）
-      - exec: $reverse_lookup
-      - matches: has_resp
-        exec: accept
-      # 本地 hosts
       - exec: $hosts
       - matches: has_resp
         exec: accept
-      # 拦截（广告/HTTPS/PTR）
       - exec: jump block_seq
-      # ANY 查询剥离 ECS
       - matches: qtype 255
         exec: $ecs_strip
+      - matches: qtype 255
+        exec: $fb_local
       - matches: qtype 255
         exec: $ttl_direct
       - matches: qtype 255
         exec: accept
-      # ECS 指定域名
       - matches: qname $ecscn
         exec: goto local_seq
       - matches: has_resp
@@ -485,12 +456,10 @@ plugins:
         exec: goto remote_seq
       - matches: has_resp
         exec: accept
-      # Geosite 分流
       - matches: qname $geosite_cn
         exec: goto local_seq
       - matches: qname $geosite_no_cn
         exec: goto remote_seq
-      # 默认走国际
       - exec: goto remote_seq
 
   # ═══════════════════════════════════════
