@@ -1,12 +1,10 @@
-# OxiDNS default configuration file
-#
-# See full documentation at:
-# https://oxidns.org
+# OxiDNS 优化配置
+# 网络架构：用户设备 → dnsmasq(:53) → OpenClash(:7874) → OxiDNS(:5335) → 上游 DNS
 
 log:
-  level: info
+  level: warn
 
-# Management API (optional)
+# 管理面板：浏览器访问 http://192.168.1.1:9199
 api:
   http:
     listen: "192.168.1.1:9199"
@@ -14,27 +12,33 @@ api:
     #   type: basic
     #   username: admin
     #   password: secret
-    # Optional static WebUI directory. Relative paths resolve from -d/--working-dir.
-    # Debian packages use -d /var/lib/oxidns, so ./webui means /var/lib/oxidns/webui.
-    # API routes are served under /api/*.
     webui:
       root: "/usr/share/oxidns/webui"
 
 plugins:
+  # ──────────────────────────────────────
+  # 规则订阅：每 12 小时自动更新
+  # ──────────────────────────────────────
+
+  # 定时触发订阅刷新
   - tag: subscription_cron
     type: cron
     args:
       timezone: Asia/Shanghai
       jobs:
         - name: refresh_rule_subscriptions
-          interval: 24h
+          interval: 12h
           executors:
             - $subscription_refresh
+
+  # 顺序执行：先下载 → 再重载
   - tag: subscription_refresh
     type: sequence
     args:
       - exec: $subscription_download
       - exec: $reload_rule_providers
+
+  # 下载规则文件到本地
   - tag: subscription_download
     type: download
     args:
@@ -62,6 +66,8 @@ plugins:
           filename: adblock.txt
       timeout: 60s
       startup_if_missing: true
+
+  # 重载所有规则提供器，使新下载的规则生效
   - tag: reload_rule_providers
     type: reload_provider
     args:
@@ -71,11 +77,19 @@ plugins:
       - $category_ads_all
       - $ad_rules
       - $gfw_ip
+
+  # ──────────────────────────────────────
+  # 规则提供器：被主链路引用的数据源
+  # ──────────────────────────────────────
+
+  # GFW 污染 IP 列表
   - tag: gfw_ip
     type: ip_set
     args:
       files:
         - /etc/oxidns/rules/gfw_ip.txt
+
+  # 广告过滤规则（合并多个列表）
   - tag: ad_rules
     type: adguard_rule
     args:
@@ -84,24 +98,32 @@ plugins:
         - /etc/oxidns/rules/adguard.txt
         - /etc/oxidns/rules/adaway.txt
         - /etc/oxidns/rules/adblock.txt
+
+  # GeoIP：中国 IP 段
   - tag: geoip_cn
     type: geoip
     args:
       file: /etc/oxidns/rules/geoip.dat
       selectors:
         - cn
+
+  # Geosite：中国域名
   - tag: geosite_cn
     type: geosite
     args:
       file: /etc/oxidns/rules/geosite.dat
       selectors:
         - cn
+
+  # Geosite：非中国域名
   - tag: geosite_no_cn
     type: geosite
     args:
       file: /etc/oxidns/rules/geosite.dat
       selectors:
         - geolocation-!cn
+
+  # Geosite：广告域名（包含 Win 广告/间谍/额外更新）
   - tag: category_ads_all
     type: geosite
     args:
@@ -109,106 +131,176 @@ plugins:
       selectors:
         - category-ads-all
         - win-spy
-        #- win-update
         - win-extra
+
+  # ──────────────────────────────────────
+  # 本地数据源
+  # ──────────────────────────────────────
+
+  # 系统 hosts 文件：可手动添加域名映射
   - tag: hosts
     type: hosts
     args:
-      short_circuit: false
+      short_circuit: true   # 命中后立即返回，不再继续解析
+
+  # ECS 指定域名（中国）：通过 WebUI 添加需要指定中国 ECS 的域名
   - tag: ecscn
     type: domain_set
     args:
       exps: null
+
+  # ECS 指定域名（非中国）：通过 WebUI 添加需要指定海外 ECS 的域名
   - tag: ecs_noncn
     type: domain_set
+    args:
+      exps: null
+
+  # 内网 PTR 反向解析：匹配私网地址段，直接拒绝而非转发上游
   - tag: local_ptr
     type: domain_set
     args:
       exps:
-        - 168.192.in-addr.arpa.
-        - 16.172.in-addr.arpa.
-        - 10.in-addr.arpa.
+        - 168.192.in-addr.arpa.    # 192.168.x.x
+        - 16.172.in-addr.arpa.     # 172.16.x.x
+        - 10.in-addr.arpa.         # 10.x.x.x
+
+  # ──────────────────────────────────────
+  # 缓存
+  # ──────────────────────────────────────
+
   - tag: lazy_cache
     type: cache
     args:
       size: 8192
-      short_circuit: false
-      lazy_cache_ttl: 86400
-      cache_negative: true
-      max_negative_ttl: 300
+      short_circuit: true        # 缓存命中后立即停止，不再查询上游
+      lazy_cache_ttl: 86400      # 过期记录保留 24h，配合 OpenClash Fake-IP 无需频繁刷新
+      cache_negative: true       # 缓存失败响应，防止重复查询不存在的域名
+      max_negative_ttl: 300      # 失败响应最多缓存 5 分钟
       negative_ttl_without_soa: 60
-      max_positive_ttl: 3600
-      ecs_in_key: true
-      dump_file: /etc/oxidns/rules/dns_cache.dump
-      dump_interval: 3600
-  - tag: query_recorder_main
-    type: query_recorder
-    args:
-      path: /etc/oxidns/rules/query-recorder-main.sqlite
-      queue_size: 8192
-      batch_size: 256
-      flush_interval_ms: 200
-      memory_tail: 1024
-      retention_days: 3
-      cleanup_interval_hours: 1
+      max_positive_ttl: 3600     # 成功响应最多缓存 1 小时
+      min_positive_ttl: 4        # 过滤 TTL < 4s 的异常记录
+      ecs_in_key: false          # 不将 ECS 信息纳入缓存键，所有客户端共享缓存，提升命中率
+      dump_file: /etc/oxidns/rules/dns_cache.dump   # 缓存持久化文件
+      dump_interval: 1800        # 每 30 分钟写盘一次，防止意外重启丢失缓存
+
+  # ──────────────────────────────────────
+  # 拦截链：处理广告 / 恶意 / 不需要的查询
+  # ──────────────────────────────────────
+
   - tag: block_seq
     type: sequence
     args:
+      # 拒绝 HTTPS(65) 和 ANY(255) 类型查询
       - matches: qtype 65 255
         exec: reject 0
+      # 广告域名 → 黑洞
       - matches: qname $category_ads_all
         exec: $ad_blackhole
       - matches: qname $ad_rules
         exec: $ad_blackhole
+      # 内网 PTR 查询 → 直接拒绝
       - matches: qname $local_ptr
         exec: reject 3
+
+  # 广告黑洞：返回空地址，short_circuit 立即停止链路
   - tag: ad_blackhole
     type: black_hole
     args:
-      ips:
-        - 0.0.0.0
-        - "::"
+      mode: null                  # A → 0.0.0.0，AAAA → ::
       short_circuit: true
+
+  # ──────────────────────────────────────
+  # 限流：防止异常流量压垮上游
+  # ──────────────────────────────────────
+
   - tag: rate_limit
     type: rate_limiter
     args:
-      qps: 200
-      burst: 400
-      mask4: 32
-      mask6: 48
+      qps: 200                    # 每秒 200 次查询
+      burst: 400                   # 允许突发 400 次
+      mask4: 32                    # IPv4 按单 IP 限流
+      mask6: 48                    # IPv6 按 /48 网段限流
+
+  # ──────────────────────────────────────
+  # 上游 DNS：国内走 DoH 加密，国际走海外 DoH
+  # ──────────────────────────────────────
+
+  # 国内上游（腾讯/阿里/火山）
   - tag: forward_local
     type: forward
     args:
       concurrent: 3
       response_selection: balanced
       upstreams:
-        - addr: https://doh.pub/dns-query
+        - tag: "doh_tencent"
+          addr: https://doh.pub/dns-query
           bootstrap: 119.29.29.29:53
+          bootstrap_version: 4
+          timeout: 5s
+          idle_timeout: 30
+          max_conns: 64
           insecure_skip_verify: false
           enable_http3: false
-        - addr: https://dns.alidns.com/dns-query
+        - tag: "doh_alibaba"
+          addr: https://dns.alidns.com/dns-query
           bootstrap: 223.5.5.5:53
+          bootstrap_version: 4
+          timeout: 5s
+          idle_timeout: 30
+          max_conns: 64
           insecure_skip_verify: false
           enable_http3: false
-        - addr: 180.184.1.1
+        - tag: "udp_huoshan"
+          addr: 180.184.1.1
+          timeout: 3s
+          idle_timeout: 30
+          max_conns: 64
           insecure_skip_verify: false
           enable_http3: false
       short_circuit: false
+
+  # 国际上游（Cloudflare / Google）
   - tag: forward_remote
     type: forward
     args:
       concurrent: 2
       response_selection: balanced
       upstreams:
-        - addr: https://cloudflare-dns.com/dns-query
+        - tag: "doh_cloudflare"
+          addr: https://cloudflare-dns.com/dns-query
           bootstrap: 223.5.5.5:53
+          bootstrap_version: 4
+          timeout: 5s
+          idle_timeout: 30
+          max_conns: 64
           insecure_skip_verify: false
           enable_http3: true
-        - addr: https://dns.google/dns-query
+        - tag: "doh_google"
+          addr: https://dns.google/dns-query
           bootstrap: 223.5.5.5:53
+          bootstrap_version: 4
+          timeout: 5s
+          idle_timeout: 30
+          max_conns: 64
           insecure_skip_verify: false
           enable_http3: true
       short_circuit: false
+
+  # ──────────────────────────────────────
+  # 双栈优选：有 IPv6 时优先使用 AAAA 记录
+  # ──────────────────────────────────────
+
+  - tag: prefer_v6
+    type: prefer_ipv6
+    args:
+      cache: true
+      cache_ttl: 3600
+
+  # ──────────────────────────────────────
+  # 转发链：国内/国际各自独立的处理流程
+  # ──────────────────────────────────────
+
+  # 国内链：查询 → 校验结果是中国 IP → 接受；否则限制 TTL
   - tag: local_seq
     type: sequence
     args:
@@ -216,6 +308,8 @@ plugins:
       - matches: resp_ip $geoip_cn
         exec: accept
       - exec: ttl 600
+
+  # 国际链：查询 → 有结果就接受；否则限制 TTL
   - tag: remote_seq
     type: sequence
     args:
@@ -223,41 +317,56 @@ plugins:
       - matches: has_resp
         exec: accept
       - exec: ttl 300
+
+  # ──────────────────────────────────────
+  # 主链路：所有查询的入口
+  # 执行顺序：限流 → hosts → 拦截 → 缓存 → ECS → geosite 分流 → 默认国际
+  # ──────────────────────────────────────
+
   - tag: main_sequence
     type: sequence
     args:
-      - exec: $query_recorder_main
+      # 超出限流 → 直接拒绝
       - matches: "!$rate_limit"
         exec: reject 3
+      # 本地 hosts 解析
       - exec: $hosts
       - matches: has_resp
         exec: accept
+      # 广告 / 恶意拦截
       - exec: jump block_seq
+      # 查询缓存
       - exec: $lazy_cache
       - matches: has_resp
         exec: accept
+      # ECS 指定域名：中国 ECS → 国内上游
       - matches: qname $ecscn
         exec: $forward_local
       - matches: has_resp
         exec: accept
+      # ECS 指定域名：海外 ECS → 国际上游
       - matches: qname $ecs_noncn
         exec: $forward_remote
       - matches: has_resp
         exec: accept
+      # 基于 Geosite 分流
       - matches: qname $geosite_cn
         exec: goto local_seq
       - matches: qname $geosite_no_cn
         exec: goto remote_seq
+      # 未匹配任何规则 → 默认走国际上游
       - exec: goto remote_seq
 
-  # UDP server listening on :5335
+  # ──────────────────────────────────────
+  # 监听入口：端口 5335 供 OpenClash 上游调用
+  # ──────────────────────────────────────
+
   - tag: udp_server
     type: udp_server
     args:
       entry: main_sequence
       listen: ":5335"
 
-  # TCP server listening on :5335
   - tag: tcp_server
     type: tcp_server
     args:
