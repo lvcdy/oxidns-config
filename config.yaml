@@ -1,44 +1,35 @@
-# OxiDNS 双缓存分离配置
-# 链路：用户设备 → dnsmasq(:53) → OpenClash(:7874) → OxiDNS(:5335) → 上游 DNS
-
-# ── 日志 ──
 log:
   level: warn
-
-# ── 出站网络 ──
+  rotation:
+    type: never
 network:
   outbound:
-    default: direct
     profiles:
       direct:
         resolver:
           nameservers:
-            - addr: "223.5.5.5"
+            - addr: https://dns.alidns.com/dns-query
+              dial_addr: 223.5.5.5
           ip_version: 4
           timeout: 5s
-        proxy: none
       remote:
         resolver:
           nameservers:
-            - addr: "223.5.5.5"
+            - addr: https://cloudflare-dns.com/dns-query
+              dial_addr: 1.1.1.1
+            - addr: https://dns.google/dns-query
+              dial_addr: 8.8.8.8
           ip_version: 4
           timeout: 5s
+          proxy: profile
         proxy:
-          socks5: "127.0.0.1:7893"
-
-# ── 管理面板 ──
+          socks5: 127.0.0.1:7893
 api:
   http:
-    listen: "192.168.1.1:9199"
+    listen: 192.168.1.1:9199
     webui:
-      root: "/usr/share/oxidns/webui"
-
+      root: /usr/share/oxidns/webui
 plugins:
-
-  # ═══════════════════════════════════════
-  # 定时任务
-  # ═══════════════════════════════════════
-
   - tag: subscription_cron
     type: cron
     args:
@@ -48,13 +39,11 @@ plugins:
           interval: 12h
           executors:
             - $subscription_refresh
-
   - tag: subscription_refresh
     type: sequence
     args:
       - exec: $subscription_download
       - exec: $reload_rule_providers
-
   - tag: subscription_download
     type: download
     args:
@@ -83,7 +72,6 @@ plugins:
           filename: adblock.txt
       timeout: 60s
       startup_if_missing: true
-
   - tag: reload_rule_providers
     type: reload_provider
     args:
@@ -93,17 +81,11 @@ plugins:
       - $category_ads_all
       - $ad_rules
       - $gfw_ip
-
-  # ═══════════════════════════════════════
-  # 规则提供器
-  # ═══════════════════════════════════════
-
   - tag: gfw_ip
     type: ip_set
     args:
       files:
         - /etc/oxidns/rules/gfw_ip.txt
-
   - tag: ad_rules
     type: adguard_rule
     args:
@@ -112,28 +94,24 @@ plugins:
         - /etc/oxidns/rules/adguard.txt
         - /etc/oxidns/rules/adaway.txt
         - /etc/oxidns/rules/adblock.txt
-
   - tag: geoip_cn
     type: geoip
     args:
       file: /etc/oxidns/rules/geoip.dat
       selectors:
         - cn
-
   - tag: geosite_cn
     type: geosite
     args:
       file: /etc/oxidns/rules/geosite.dat
       selectors:
         - cn
-
   - tag: geosite_no_cn
     type: geosite
     args:
       file: /etc/oxidns/rules/geosite.dat
       selectors:
         - geolocation-!cn
-
   - tag: category_ads_all
     type: geosite
     args:
@@ -142,26 +120,18 @@ plugins:
         - category-ads-all
         - win-spy
         - win-extra
-
-  # ═══════════════════════════════════════
-  # 本地数据
-  # ═══════════════════════════════════════
-
   - tag: hosts
     type: hosts
     args:
       short_circuit: true
-
   - tag: ecscn
     type: domain_set
     args:
       exps: null
-
   - tag: ecs_noncn
     type: domain_set
     args:
       exps: null
-
   - tag: local_ptr
     type: domain_set
     args:
@@ -169,22 +139,16 @@ plugins:
         - 168.192.in-addr.arpa.
         - 16.172.in-addr.arpa.
         - 10.in-addr.arpa.
-
   - tag: private_lan_ip
     type: ip_set
     args:
       ips:
-        - "10.0.0.0/8"
-        - "100.64.0.0/10"
-        - "127.0.0.0/8"
-        - "169.254.0.0/16"
-        - "172.16.0.0/12"
-        - "192.168.0.0/16"
-
-  # ═══════════════════════════════════════
-  # 双缓存
-  # ═══════════════════════════════════════
-
+        - 10.0.0.0/8
+        - 100.64.0.0/10
+        - 127.0.0.0/8
+        - 169.254.0.0/16
+        - 172.16.0.0/12
+        - 192.168.0.0/16
   - tag: cache_direct
     type: cache
     args:
@@ -199,7 +163,6 @@ plugins:
       ecs_in_key: false
       dump_file: /etc/oxidns/rules/dns_cache_direct.dump
       dump_interval: 1800
-
   - tag: cache_remote
     type: cache
     args:
@@ -214,43 +177,26 @@ plugins:
       ecs_in_key: false
       dump_file: /etc/oxidns/rules/dns_cache_remote.dump
       dump_interval: 1800
-
-  # ═══════════════════════════════════════
-  # ECS 处理器
-  # ═══════════════════════════════════════
-
   - tag: ecs_direct
     type: ecs_handler
     args:
       forward: true
       send: false
-
   - tag: ecs_strip
     type: ecs_handler
     args:
       forward: false
       send: false
-
-  # ═══════════════════════════════════════
-  # TTL 控制器
-  # ═══════════════════════════════════════
-
   - tag: ttl_direct
     type: ttl
     args:
       min: 60
       max: 3600
-
   - tag: ttl_remote
     type: ttl
     args:
       min: 300
       max: 86400
-
-  # ═══════════════════════════════════════
-  # 拦截链
-  # ═══════════════════════════════════════
-
   - tag: block_seq
     type: sequence
     args:
@@ -262,17 +208,11 @@ plugins:
         exec: $ad_blackhole
       - matches: qname $local_ptr
         exec: reject 3
-
   - tag: ad_blackhole
     type: black_hole
     args:
       mode: null
       short_circuit: true
-
-  # ═══════════════════════════════════════
-  # 限流
-  # ═══════════════════════════════════════
-
   - tag: rate_limit
     type: rate_limiter
     args:
@@ -280,11 +220,6 @@ plugins:
       burst: 400
       mask4: 32
       mask6: 48
-
-  # ═══════════════════════════════════════
-  # 上游 DNS
-  # ═══════════════════════════════════════
-
   - tag: forward_tencent
     type: forward
     args:
@@ -301,7 +236,6 @@ plugins:
           timeout: 5s
           enable_http3: false
       short_circuit: false
-
   - tag: forward_alibaba
     type: forward
     args:
@@ -318,7 +252,6 @@ plugins:
           timeout: 5s
           enable_http3: false
       short_circuit: false
-
   - tag: forward_cloudflare
     type: forward
     args:
@@ -335,7 +268,6 @@ plugins:
           timeout: 5s
           enable_http3: true
       short_circuit: false
-
   - tag: forward_google
     type: forward
     args:
@@ -352,11 +284,6 @@ plugins:
           timeout: 5s
           enable_http3: true
       short_circuit: false
-
-  # ═══════════════════════════════════════
-  # 故障转移
-  # ═══════════════════════════════════════
-
   - tag: fb_local
     type: fallback
     args:
@@ -364,7 +291,6 @@ plugins:
       secondary: forward_alibaba
       threshold: 2500
       always_standby: false
-
   - tag: fb_remote
     type: fallback
     args:
@@ -372,33 +298,17 @@ plugins:
       secondary: forward_google
       threshold: 2500
       always_standby: false
-
-  # ═══════════════════════════════════════
-  # 反查
-  # ═══════════════════════════════════════
-
   - tag: reverse_lookup
     type: reverse_lookup
     args:
       size: 4096
       ttl: 1800
       handle_ptr: false
-
-  # ═══════════════════════════════════════
-  # 双栈优选（必须放在 forward 之前）
-  # ═══════════════════════════════════════
-
   - tag: prefer_v6
     type: prefer_ipv6
     args:
       cache: true
       cache_ttl: 3600
-
-  # ═══════════════════════════════════════
-  # 转发链
-  # ═══════════════════════════════════════
-
-  # 国内：缓存 → ECS → 双栈 → 故障转移 → 反查 → 校验中国 IP → TTL
   - tag: local_seq
     type: sequence
     args:
@@ -412,8 +322,6 @@ plugins:
       - matches: resp_ip $geoip_cn
         exec: accept
       - exec: $ttl_direct
-
-  # 国际：缓存 → 双栈 → 故障转移 → 反查 → 有结果就接受 → TTL
   - tag: remote_seq
     type: sequence
     args:
@@ -426,11 +334,6 @@ plugins:
       - matches: has_resp
         exec: accept
       - exec: $ttl_remote
-
-  # ═══════════════════════════════════════
-  # 主链路
-  # ═══════════════════════════════════════
-
   - tag: main_sequence
     type: sequence
     args:
@@ -461,19 +364,13 @@ plugins:
       - matches: qname $geosite_no_cn
         exec: goto remote_seq
       - exec: goto remote_seq
-
-  # ═══════════════════════════════════════
-  # 监听入口
-  # ═══════════════════════════════════════
-
   - tag: udp_server
     type: udp_server
     args:
       entry: main_sequence
-      listen: ":5335"
-
+      listen: :5335
   - tag: tcp_server
     type: tcp_server
     args:
       entry: main_sequence
-      listen: ":5335"
+      listen: :5335
