@@ -2,33 +2,13 @@ log:
   level: warn
   rotation:
     type: never
-network:
-  outbound:
-    profiles:
-      direct:
-        resolver:
-          nameservers:
-            - addr: https://dns.alidns.com/dns-query
-              dial_addr: 223.5.5.5
-          ip_version: 4
-          timeout: 5s
-      remote:
-        resolver:
-          nameservers:
-            - addr: https://cloudflare-dns.com/dns-query
-              dial_addr: 1.1.1.1
-            - addr: https://dns.google/dns-query
-              dial_addr: 8.8.8.8
-          ip_version: 4
-          timeout: 5s
-          proxy: profile
-        proxy:
-          socks5: 127.0.0.1:7893
+
 api:
   http:
     listen: 192.168.1.1:9199
     webui:
       root: /usr/share/oxidns/webui
+
 plugins:
   - tag: subscription_cron
     type: cron
@@ -39,15 +19,16 @@ plugins:
           interval: 12h
           executors:
             - $subscription_refresh
+
   - tag: subscription_refresh
     type: sequence
     args:
       - exec: $subscription_download
       - exec: $reload_rule_providers
+
   - tag: subscription_download
     type: download
     args:
-      outbound: remote
       downloads:
         - url: https://fastly.jsdelivr.net/gh/pmkol/easymosdns@rules/gfw_ip_list.txt
           dir: /etc/oxidns/rules
@@ -72,6 +53,10 @@ plugins:
           filename: adblock.txt
       timeout: 60s
       startup_if_missing: true
+
+  # ============================================
+  # 规则重载
+  # ============================================
   - tag: reload_rule_providers
     type: reload_provider
     args:
@@ -81,11 +66,16 @@ plugins:
       - $category_ads_all
       - $ad_rules
       - $gfw_ip
+
+  # ============================================
+  # 规则提供者
+  # ============================================
   - tag: gfw_ip
     type: ip_set
     args:
       files:
         - /etc/oxidns/rules/gfw_ip.txt
+
   - tag: ad_rules
     type: adguard_rule
     args:
@@ -94,24 +84,28 @@ plugins:
         - /etc/oxidns/rules/adguard.txt
         - /etc/oxidns/rules/adaway.txt
         - /etc/oxidns/rules/adblock.txt
+
   - tag: geoip_cn
     type: geoip
     args:
       file: /etc/oxidns/rules/geoip.dat
       selectors:
         - cn
+
   - tag: geosite_cn
     type: geosite
     args:
       file: /etc/oxidns/rules/geosite.dat
       selectors:
         - cn
+
   - tag: geosite_no_cn
     type: geosite
     args:
       file: /etc/oxidns/rules/geosite.dat
       selectors:
         - geolocation-!cn
+
   - tag: category_ads_all
     type: geosite
     args:
@@ -120,18 +114,25 @@ plugins:
         - category-ads-all
         - win-spy
         - win-extra
+
+  # ============================================
+  # 域名/IP集合
+  # ============================================
   - tag: hosts
     type: hosts
     args:
       short_circuit: true
+
   - tag: ecscn
     type: domain_set
     args:
       exps: null
+
   - tag: ecs_noncn
     type: domain_set
     args:
       exps: null
+
   - tag: local_ptr
     type: domain_set
     args:
@@ -139,6 +140,7 @@ plugins:
         - 168.192.in-addr.arpa.
         - 16.172.in-addr.arpa.
         - 10.in-addr.arpa.
+
   - tag: private_lan_ip
     type: ip_set
     args:
@@ -149,6 +151,10 @@ plugins:
         - 169.254.0.0/16
         - 172.16.0.0/12
         - 192.168.0.0/16
+
+  # ============================================
+  # 缓存
+  # ============================================
   - tag: cache_direct
     type: cache
     args:
@@ -163,6 +169,7 @@ plugins:
       ecs_in_key: false
       dump_file: /etc/oxidns/rules/dns_cache_direct.dump
       dump_interval: 1800
+
   - tag: cache_remote
     type: cache
     args:
@@ -177,26 +184,40 @@ plugins:
       ecs_in_key: false
       dump_file: /etc/oxidns/rules/dns_cache_remote.dump
       dump_interval: 1800
+
+  # ============================================
+  # ECS处理
+  # ============================================
   - tag: ecs_direct
     type: ecs_handler
     args:
       forward: true
       send: false
+
   - tag: ecs_strip
     type: ecs_handler
     args:
       forward: false
       send: false
+
+  # ============================================
+  # TTL处理
+  # ============================================
   - tag: ttl_direct
     type: ttl
     args:
       min: 60
       max: 3600
+
   - tag: ttl_remote
     type: ttl
     args:
       min: 300
       max: 86400
+
+  # ============================================
+  # 广告拦截
+  # ============================================
   - tag: block_seq
     type: sequence
     args:
@@ -208,18 +229,16 @@ plugins:
         exec: $ad_blackhole
       - matches: qname $local_ptr
         exec: reject 3
+
   - tag: ad_blackhole
     type: black_hole
     args:
       mode: null
       short_circuit: true
-  - tag: rate_limit
-    type: rate_limiter
-    args:
-      qps: 200
-      burst: 400
-      mask4: 32
-      mask6: 48
+
+  # ============================================
+  # 国内DNS转发
+  # ============================================
   - tag: forward_tencent
     type: forward
     args:
@@ -236,6 +255,7 @@ plugins:
           timeout: 5s
           enable_http3: false
       short_circuit: false
+
   - tag: forward_alibaba
     type: forward
     args:
@@ -252,6 +272,10 @@ plugins:
           timeout: 5s
           enable_http3: false
       short_circuit: false
+
+  # ============================================
+  # 国外DNS转发
+  # ============================================
   - tag: forward_cloudflare
     type: forward
     args:
@@ -266,8 +290,9 @@ plugins:
           max_conns: 64
           insecure_skip_verify: false
           timeout: 5s
-          enable_http3: true
+          enable_http3: false
       short_circuit: false
+
   - tag: forward_google
     type: forward
     args:
@@ -282,8 +307,12 @@ plugins:
           max_conns: 64
           insecure_skip_verify: false
           timeout: 5s
-          enable_http3: true
+          enable_http3: false
       short_circuit: false
+
+  # ============================================
+  # 故障转移
+  # ============================================
   - tag: fb_local
     type: fallback
     args:
@@ -291,6 +320,7 @@ plugins:
       secondary: forward_alibaba
       threshold: 2500
       always_standby: false
+
   - tag: fb_remote
     type: fallback
     args:
@@ -298,17 +328,20 @@ plugins:
       secondary: forward_google
       threshold: 2500
       always_standby: false
+
+  # ============================================
+  # 辅助功能
+  # ============================================
   - tag: reverse_lookup
     type: reverse_lookup
     args:
       size: 4096
       ttl: 1800
       handle_ptr: false
-  - tag: prefer_v6
-    type: prefer_ipv6
-    args:
-      cache: true
-      cache_ttl: 3600
+
+  # ============================================
+  # 业务序列
+  # ============================================
   - tag: local_seq
     type: sequence
     args:
@@ -316,29 +349,30 @@ plugins:
       - matches: has_resp
         exec: accept
       - exec: $ecs_direct
-      - exec: $prefer_v6
       - exec: $fb_local
       - exec: $reverse_lookup
       - matches: resp_ip $geoip_cn
         exec: accept
       - exec: $ttl_direct
+
   - tag: remote_seq
     type: sequence
     args:
       - exec: $cache_remote
       - matches: has_resp
         exec: accept
-      - exec: $prefer_v6
       - exec: $fb_remote
       - exec: $reverse_lookup
       - matches: has_resp
         exec: accept
       - exec: $ttl_remote
+
+  # ============================================
+  # 主序列（入口）
+  # ============================================
   - tag: main_sequence
     type: sequence
     args:
-      - matches: "!$rate_limit"
-        exec: reject 3
       - exec: $hosts
       - matches: has_resp
         exec: accept
@@ -364,11 +398,16 @@ plugins:
       - matches: qname $geosite_no_cn
         exec: goto remote_seq
       - exec: goto remote_seq
+
+  # ============================================
+  # 监听服务器
+  # ============================================
   - tag: udp_server
     type: udp_server
     args:
       entry: main_sequence
       listen: :5335
+
   - tag: tcp_server
     type: tcp_server
     args:
