@@ -90,6 +90,8 @@ plugins:
       file: /etc/oxidns/rules/geosite.dat
       selectors:
         - category-ads-all
+        - win-spy
+        - win-extra
 
   # 域名/IP集合
   - tag: hosts
@@ -124,6 +126,9 @@ plugins:
       - exec: $hosts
       - matches: has_resp
         exec: accept
+      # 1.5 拦截 PTR 查询，防止内网拓扑泄露
+      - matches: qtype PTR
+        exec: reject 3
       # 2. 广告拦截
       - matches: qname $ad_rules
         exec: $ad_blackhole
