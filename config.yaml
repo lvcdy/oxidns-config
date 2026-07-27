@@ -15,7 +15,6 @@ api:
       root: /usr/share/oxidns/webui
 
 plugins:
-  # 定时更新规则
   - tag: cron_update
     type: cron
     args:
@@ -163,8 +162,6 @@ plugins:
     args:
       mode: null
       short_circuit: true
-
-  # 国内DNS转发
   - tag: forward_cn
     type: forward
     args:
@@ -176,18 +173,23 @@ plugins:
           bootstrap: 119.29.29.29:53
           bootstrap_version: 4
           idle_timeout: 30
+          insecure_skip_verify: false
           timeout: 5s
         - tag: doh_alibaba
           addr: https://dns.alidns.com/dns-query
           bootstrap: 223.5.5.5:53
           bootstrap_version: 4
           idle_timeout: 30
+          insecure_skip_verify: false
           timeout: 5s
+          enable_http3: true
         - tag: udp_volcengine1
           addr: 180.184.1.1:53
+          insecure_skip_verify: false
           timeout: 5s
         - tag: udp_volcengine2
           addr: 180.184.2.2:53
+          insecure_skip_verify: false
           timeout: 5s
       short_circuit: false
 
