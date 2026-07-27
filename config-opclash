@@ -110,13 +110,12 @@ plugins:
   - tag: forward_openclash
     type: forward
     args:
-      concurrent: 1
-      response_selection: balanced
       upstreams:
         - tag: openclash_dns
           addr: 127.0.0.1:7874
+          idle_timeout: 30
           timeout: 5s
-      short_circuit: false
+      short_circuit: true
 
   # 主序列
   - tag: main_sequence
@@ -137,10 +136,8 @@ plugins:
       # 3. 恶意/钓鱼域名拦截（防黑客）
       - matches: qname $security_rules
         exec: $ad_blackhole
-      # 4. 其余请求全部转发给 OpenClash
+      # 4. 其余请求全部转发给 OpenClash（short_circuit 自动停止序列）
       - exec: $forward_openclash
-      - matches: has_resp
-        exec: accept
       - exec: reject 3
 
   # 监听服务器

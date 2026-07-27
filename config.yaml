@@ -31,6 +31,7 @@ plugins:
     type: download
     args:
       downloads:
+        # 广告拦截规则
         - url: https://anti-ad.net/adguard.txt
           dir: /etc/oxidns/rules
           filename: antiad.txt
@@ -43,6 +44,14 @@ plugins:
         - url: https://raw.githubusercontent.com/217heidai/adblockfilters/main/rules/adblockdns.txt
           dir: /etc/oxidns/rules
           filename: adblock.txt
+        # 恶意域名拦截规则（防黑客/防钓鱼/防恶意软件）
+        - url: https://big.oisd.nl
+          dir: /etc/oxidns/rules
+          filename: oisd_big.txt
+        - url: https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/pro.mini.txt
+          dir: /etc/oxidns/rules
+          filename: hagezi_pro_mini.txt
+        # 地理位置数据（geosite + geoip）
         - url: https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geosite.dat
           dir: /etc/oxidns/rules
           filename: geosite.dat
@@ -56,6 +65,7 @@ plugins:
     type: reload_provider
     args:
       - $ad_rules
+      - $security_rules
       - $geoip_cn
       - $geosite_cn
       - $geosite_no_cn
@@ -70,6 +80,14 @@ plugins:
         - /etc/oxidns/rules/adguard.txt
         - /etc/oxidns/rules/adaway.txt
         - /etc/oxidns/rules/adblock.txt
+
+  # 恶意域名拦截规则（防黑客/防钓鱼/防恶意软件）
+  - tag: security_rules
+    type: adguard_rule
+    args:
+      files:
+        - /etc/oxidns/rules/oisd_big.txt
+        - /etc/oxidns/rules/hagezi_pro_mini.txt
 
   - tag: geoip_cn
     type: geoip
@@ -108,14 +126,6 @@ plugins:
     args:
       short_circuit: true
 
-  - tag: local_ptr
-    type: domain_set
-    args:
-      exps:
-        - 168.192.in-addr.arpa.
-        - 16.172.in-addr.arpa.
-        - 10.in-addr.arpa.
-
   # 缓存
   - tag: cache_direct
     type: cache
@@ -136,12 +146,12 @@ plugins:
     type: cache
     args:
       size: 4096
-      short_circuit: false
-      lazy_cache_ttl: 300
+      short_circuit: true
+      lazy_cache_ttl: 86400
       cache_negative: true
       max_negative_ttl: 30
       negative_ttl_without_soa: 10
-      max_positive_ttl: 300
+      max_positive_ttl: 3600
       min_positive_ttl: 60
       ecs_in_key: false
       dump_file: /etc/oxidns/rules/dns_cache_remote.dump
@@ -166,19 +176,13 @@ plugins:
           bootstrap: 119.29.29.29:53
           bootstrap_version: 4
           idle_timeout: 30
-          max_conns: 64
-          insecure_skip_verify: false
           timeout: 5s
-          enable_http3: false
         - tag: doh_alibaba
           addr: https://dns.alidns.com/dns-query
           bootstrap: 223.5.5.5:53
           bootstrap_version: 4
           idle_timeout: 30
-          max_conns: 64
-          insecure_skip_verify: false
           timeout: 5s
-          enable_http3: false
         - tag: udp_volcengine1
           addr: 180.184.1.1:53
           timeout: 5s
@@ -191,13 +195,11 @@ plugins:
   - tag: forward_openclash
     type: forward
     args:
-      concurrent: 1
-      response_selection: balanced
       upstreams:
         - tag: openclash_dns
           addr: 127.0.0.1:7874
           timeout: 5s
-      short_circuit: false
+      short_circuit: true
 
   # 业务序列
   - tag: local_seq
@@ -215,34 +217,38 @@ plugins:
     type: sequence
     args:
       - exec: $cache_remote
-      - matches: has_resp
-        exec: accept
       - exec: $forward_openclash
-      - matches: has_resp
-        exec: accept
       - exec: reject 3
 
   # 主序列
   - tag: main_sequence
     type: sequence
     args:
+      # 1. 本地 hosts 优先
       - exec: $hosts
       - matches: has_resp
         exec: accept
+      # 2. 拦截 PTR 查询，防止内网拓扑泄露
       - matches: qtype PTR
         exec: reject 3
+      # 3. HTTPS/SVCB 记录走远程
       - matches: qtype 65
         exec: goto remote_seq
+      # 4. 广告拦截
       - matches: qname $category_ads_all
         exec: $ad_blackhole
       - matches: qname $ad_rules
         exec: $ad_blackhole
-      - matches: qname $local_ptr
-        exec: reject 3
+      # 5. 恶意/钓鱼域名拦截（防黑客）
+      - matches: qname $security_rules
+        exec: $ad_blackhole
+      # 6. 国内域名走国内DNS
       - matches: qname $geosite_cn
         exec: goto local_seq
+      # 7. 国外域名走远程
       - matches: qname $geosite_no_cn
         exec: goto remote_seq
+      # 8. 其余走远程（fallback）
       - exec: goto remote_seq
 
   # 监听服务器
