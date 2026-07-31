@@ -2,7 +2,7 @@
 # 架构：客户端 → OxiDNS(:5335) → 国内DNS / OpenClash(:7874)
 
 log:
-  level: error
+  level: info
   file: ./oxidns.log
   rotation:
     type: daily
