@@ -1,0 +1,1 @@
+0 3 * * * wget -q -O /dev/null '你的DNSPod完整链接' >/dev/null 2>&1
